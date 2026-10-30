@@ -1,0 +1,219 @@
+// Prisma Schema - Plateforme TV OASIS RH & Gestion des Activités
+// Projet de Fin d'Études - Master 2
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  EMPLOYE
+  SUPERVISEUR
+  RH
+  DIRECTEUR
+}
+
+enum StatutPresence {
+  PRESENT
+  RETARD
+  ABSENT
+  EN_MISSION
+}
+
+enum StatutFiche {
+  BROUILLON
+  EN_ATTENTE
+  VALIDE
+  REJETE
+}
+
+enum StatutConge {
+  EN_ATTENTE
+  VALIDE
+  REFUSE
+}
+
+enum TypeConge {
+  PAYE
+  MALADIE
+  RECUPERATION
+  MISSION_EXTERIEURE
+  EXCEPTIONNEL
+}
+
+// -------------------------------------------------------------
+// ORGANISATION & STRUCTURE INTERNE (TV OASIS)
+// -------------------------------------------------------------
+
+model Departement {
+  id          Int       @id @default(autoincrement())
+  nom         String    @unique
+  code        String?   @unique
+  employes    Employe[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Poste {
+  id          Int       @id @default(autoincrement())
+  intitule    String    @unique
+  employes    Employe[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Employe {
+  id                   Int                 @id @default(autoincrement())
+  matricule            String              @unique
+  nom                  String
+  prenom               String
+  email                String              @unique
+  motDePasse           String
+  role                 Role                @default(EMPLOYE)
+  actif                Boolean             @default(true)
+  
+  // Horaires de référence pour le calcul automatique des retards
+  heureDebutTheorique  String              @default("08:00") // Format "HH:mm"
+  heureFinTheorique    String              @default("17:00")
+  
+  // Relations organisationnelles
+  departementId        Int?
+  departement          Departement?        @relation(fields: [departementId], references: [id])
+  posteId              Int?
+  poste                Poste?              @relation(fields: [posteId], references: [id])
+  
+  // Relations opérationnelles
+  pointages            PointagePresence[]
+  fichesActivite       FicheJournaliere[]  @relation("EmployeFiches")
+  fichesValidees       FicheJournaliere[]  @relation("ValidateurFiches")
+  demandesConge        DemandeConge[]
+  auditLogs            AuditLog[]
+
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+}
+
+// -------------------------------------------------------------
+// POINTAGE DES PRÉSENCES (ARRIVÉES / DÉPARTS / RETARDS)
+// -------------------------------------------------------------
+
+model PointagePresence {
+  id              Int            @id @default(autoincrement())
+  employeId       Int
+  employe         Employe        @relation(fields: [employeId], references: [id], onDelete: Cascade)
+  
+  dateJour        DateTime       @db.Date
+  heureArrivee    DateTime
+  heureDepart     DateTime?
+  
+  retardMinutes   Int            @default(0)
+  heuresTravaillees Float        @default(0) // En heures décimales (ex: 7.5h)
+  statut          StatutPresence @default(PRESENT)
+  commentaire     String?
+  
+  // Signature / Empreinte de pointage (Web, QR Code, RFID)
+  methodePointage String         @default("WEB_LAN")
+  ipAddress       String?
+
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@unique([employeId, dateJour])
+}
+
+// -------------------------------------------------------------
+// SUIVI D'ACTIVITÉ PAR PROJET (LA FICHE TV OASIS)
+// -------------------------------------------------------------
+
+model Projet {
+  id          Int          @id @default(autoincrement())
+  code        String       @unique // ex: "LS", "JT", "MAG"
+  titre       String       // ex: "Hivelona @ teniny", "Journal Télévisé"
+  description String?
+  actif       Boolean      @default(true)
+  taches      TacheLigne[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model FicheJournaliere {
+  id                    Int          @id @default(autoincrement())
+  employeId             Int
+  employe               Employe      @relation("EmployeFiches", fields: [employeId], references: [id], onDelete: Cascade)
+  
+  dateJour              DateTime     @db.Date
+  statut                StatutFiche  @default(BROUILLON)
+  
+  // Workflow de validation hiérarchique (colonne "Validation" de la fiche papier)
+  valideParId           Int?
+  validePar             Employe?     @relation("ValidateurFiches", fields: [valideParId], references: [id])
+  dateValidation        DateTime?
+  commentaireValidation String?
+
+  taches                TacheLigne[]
+
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  @@unique([employeId, dateJour])
+}
+
+model TacheLigne {
+  id            Int              @id @default(autoincrement())
+  ficheId       Int
+  fiche         FicheJournaliere @relation(fields: [ficheId], references: [id], onDelete: Cascade)
+  
+  projetId      Int
+  projet        Projet           @relation(fields: [projetId], references: [id])
+  
+  description   String           // ex: "Hivelona @ teniny fizarana talata"
+  heureDebut    String           // Format "HH:mm" (ex: "10:00")
+  heureFin      String           // Format "HH:mm" (ex: "10:34")
+  dureeMinutes  Int              // Calculé automatiquement (ex: 34)
+
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+}
+
+// -------------------------------------------------------------
+// GESTION DES CONGÉS ET ABSENCES
+// -------------------------------------------------------------
+
+model DemandeConge {
+  id          Int         @id @default(autoincrement())
+  employeId   Int
+  employe     Employe     @relation(fields: [employeId], references: [id], onDelete: Cascade)
+  
+  typeConge   TypeConge
+  dateDebut   DateTime    @db.Date
+  dateFin     DateTime    @db.Date
+  motif       String?
+  statut      StatutConge @default(EN_ATTENTE)
+  
+  valideParId Int?
+  reponseMotif String?
+
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+// -------------------------------------------------------------
+// SÉCURITÉ, TRAÇABILITÉ & AUDITABILITÉ (Critère Master 2)
+// -------------------------------------------------------------
+
+model AuditLog {
+  id               Int      @id @default(autoincrement())
+  employeId        Int?
+  employe          Employe? @relation(fields: [employeId], references: [id])
+  
+  action           String   // "MODIFICATION_POINTAGE", "VALIDATION_FICHE", "CONNEXION"
+  entite           String   // "PointagePresence", "FicheJournaliere"
+  entiteId         Int?
+  anciennesValeurs String?  // JSON sous forme de texte
+  nouvellesValeurs String?  // JSON sous forme de texte
+  ipAddress        String?
+  timestamp        DateTime @default(now())
+}
